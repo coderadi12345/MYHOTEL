@@ -1,0 +1,112 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: myhotel-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - myhotel-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: myhotel-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - myhotel-net
+
+  plain-api:
+    build:
+      context: ../PlainAPI
+      dockerfile: Dockerfile
+    container_name: myhotel-plain-api
+    restart: unless-stopped
+    environment:
+      PORT: 3002
+      DB_HOST: mysql
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      DB_NAME: ${PLAINAPI_DB_NAME}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - myhotel-net
+
+  booking-service:
+    build:
+      context: ../HotelBookingservice_copy/HOTELBOOKINGSERVICE
+      dockerfile: Dockerfile
+    container_name: myhotel-booking-service
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${BOOKING_DB_NAME}
+      REDIS_SERVER_URL: redis://redis:6379
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - myhotel-net
+
+  notification-service:
+    build:
+      context: ../NotificationService/Express_Starter_Template
+      dockerfile: Dockerfile
+    container_name: myhotel-notification-service
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MAIL_USER: ${MAIL_USER}
+      MAIL_PASS: ${MAIL_PASS}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - myhotel-net
+
+  web:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_HOTEL_API: /hotel-api
+        VITE_BOOKING_API: /booking-api
+        VITE_NOTIFICATION_API: /notification-api
+    container_name: myhotel-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - plain-api
+      - booking-service
+      - notification-service
+    networks:
+      - myhotel-net
+
+volumes:
+  mysql_data:
+
+networks:
+  myhotel-net:
+    driver: bridge
